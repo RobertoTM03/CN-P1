@@ -1,0 +1,682 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ECS Fargate + API Gateway REST API con DynamoDB (Arquitectura acoplada)"
+
+Parameters:
+  ImageName:
+    Type: String
+    Description: ECR Image Name
+    Default: tasks-acoplada:latest
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Al menos 2 subnets
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC
+
+  VpcCidr:
+    Type: String
+    Description: Bloque CIDR de la VPC (ej. 10.0.0.0/16) para restringir el acceso al Security Group de ECS.
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+
+  DBDynamoName:
+    Type: String
+    Default: "tasks"
+    Description: Nombre de la tabla DynamoDB
+
+# ============================================================================
+# RECURSOS DE RED
+# ============================================================================
+Resources:
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group para ECS tasks (Solo acceso desde el NLB interno)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref VpcCidr
+
+  # ============================================================================
+  # LOAD BALANCER
+  # ============================================================================
+  NLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: tasks-ecs-nlb
+      Type: network
+      Scheme: internal
+      Subnets: !Ref SubnetIds
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: tasks-ecs-tg
+      Port: 8080
+      Protocol: TCP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: "/"
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref NLB
+      Port: 8080
+      Protocol: TCP
+
+  # ============================================================================
+  # ECS
+  # ============================================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: tasks-ecs-cluster
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: tasks-ecs-task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      TaskRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      ContainerDefinitions:
+        - Name: tasks-ecs-container
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/tasks-ecs
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: tasks-ecs
+              awslogs-create-group: "true"
+          Environment:
+            - Name: DYNAMODB_TABLE_NAME
+              Value: !Ref DBDynamoName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: tasks-ecs-service
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: tasks-ecs-container
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+  # ============================================================================
+  # API GATEWAY
+  # ============================================================================
+  VPCLink:
+    Type: AWS::ApiGateway::VpcLink
+    Properties:
+      Name: tasks-ecs-vpc-link
+      TargetArns:
+        - !Ref NLB
+
+  RestAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: tasks-ecs-api
+      Description: API pública para gestión de tareas con DynamoDB (arquitectura acoplada ECS)
+
+  TasksResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: tasks
+
+  TaskResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: task
+
+  TaskIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !Ref TaskResource
+      PathPart: "{id}"
+
+  # GET /tasks (obtener todas las tareas)
+  GetTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TasksResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub "http://${NLB.DNSName}:8080/tasks"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VPCLink
+
+  # POST /task (crear una tarea)
+  PostTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "http://${NLB.DNSName}:8080/task"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VPCLink
+
+  # GET /task/{id} (obtener una tarea por ID)
+  GetTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub "http://${NLB.DNSName}:8080/task/{id}"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VPCLink
+        RequestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # PUT /task/{id} (actualizar una tarea)
+  PutTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: PUT
+        Uri: !Sub "http://${NLB.DNSName}:8080/task/{id}"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VPCLink
+        RequestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # DELETE /task/{id} (eliminar una tarea)
+  DeleteTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: DELETE
+        Uri: !Sub "http://${NLB.DNSName}:8080/task/{id}"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VPCLink
+        RequestParameters:
+          integration.request.path.id: method.request.path.id
+
+  OptionsTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TasksResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  OptionsTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  OptionsTaskIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetTasksMethod
+      - PostTaskMethod
+      - GetTaskMethod
+      - PutTaskMethod
+      - DeleteTaskMethod
+      - OptionsTasksMethod
+      - OptionsTaskMethod
+      - OptionsTaskIdMethod
+    Properties:
+      RestApiId: !Ref RestAPI
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: prod
+      
+  APIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: tasks-ecs-api-key
+      Enabled: true
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: APIStage
+    Properties:
+      UsagePlanName: tasks-ecs-usage-plan
+      ApiStages:
+        - ApiId: !Ref RestAPI
+          Stage: !Ref APIStage
+
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref APIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # ============================================================================
+  # DOCUMENTACIÓN DE API GATEWAY
+  # ============================================================================
+  
+  # Documentación general de la API
+  APIDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: API
+      Properties: !Sub |
+        {
+          "info": {
+            "description": "API REST para la gestión de tareas (Tasks CRUD). Arquitectura acoplada usando ECS Fargate con DynamoDB.",
+            "version": "1.0.0"
+          }
+        }
+
+  # Documentación del recurso /tasks
+  TasksResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /tasks
+      Properties: !Sub |
+        {
+          "description": "Recurso para gestionar la colección de tareas"
+        }
+
+  # Documentación del método GET /tasks
+  GetTasksMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /tasks
+        Method: GET
+      Properties: !Sub |
+        {
+          "summary": "Obtener todas las tareas",
+          "description": "Devuelve un listado completo de todas las tareas almacenadas en DynamoDB",
+          "tags": ["Tasks"],
+          "responses": {
+            "200": {
+              "description": "Lista de tareas obtenida exitosamente"
+            },
+            "500": {
+              "description": "Error interno del servidor"
+            }
+          }
+        }
+
+  # Documentación del recurso /task
+  TaskResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /task
+      Properties: !Sub |
+        {
+          "description": "Recurso para operaciones sobre tareas individuales"
+        }
+
+  # Documentación del método POST /task
+  PostTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task
+        Method: POST
+      Properties: !Sub |
+        {
+          "summary": "Crear una nueva tarea",
+          "description": "Crea una nueva tarea en DynamoDB con título y descripción",
+          "tags": ["Tasks"],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["title", "description"],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Título de la tarea"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Descripción de la tarea"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Tarea creada exitosamente"
+            },
+            "400": {
+              "description": "Datos de entrada inválidos"
+            }
+          }
+        }
+
+  # Documentación del recurso /task/{id}
+  TaskIdResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /task/{id}
+      Properties: !Sub |
+        {
+          "description": "Recurso para operaciones sobre una tarea específica identificada por su ID"
+        }
+
+  # Documentación del método GET /task/{id}
+  GetTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: GET
+      Properties: !Sub |
+        {
+          "summary": "Obtener una tarea por ID",
+          "description": "Recupera los detalles de una tarea específica usando su identificador único",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Tarea encontrada"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Documentación del método PUT /task/{id}
+  PutTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: PUT
+      Properties: !Sub |
+        {
+          "summary": "Actualizar una tarea",
+          "description": "Actualiza el título y/o descripción de una tarea existente",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea a actualizar"
+            }
+          ],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["title", "description"],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Nuevo título de la tarea"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Nueva descripción de la tarea"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Tarea actualizada exitosamente"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Documentación del método DELETE /task/{id}
+  DeleteTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: DELETE
+      Properties: !Sub |
+        {
+          "summary": "Eliminar una tarea",
+          "description": "Elimina permanentemente una tarea de la base de datos",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea a eliminar"
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "Tarea eliminada exitosamente (sin contenido)"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Documentación del recurso /docs
+  DocsResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /docs
+      Properties: !Sub |
+        {
+          "description": "Documentación interactiva de la API (Swagger UI)"
+        }
+
+  # Versión de la documentación
+  APIDocumentationVersion:
+    Type: AWS::ApiGateway::DocumentationVersion
+    DependsOn:
+      - APIDocumentation
+      - TasksResourceDocumentation
+      - GetTasksMethodDocumentation
+      - TaskResourceDocumentation
+      - PostTaskMethodDocumentation
+      - TaskIdResourceDocumentation
+      - GetTaskMethodDocumentation
+      - PutTaskMethodDocumentation
+      - DeleteTaskMethodDocumentation
+      - DocsResourceDocumentation
+    Properties:
+      RestApiId: !Ref RestAPI
+      DocumentationVersion: "1.0.0"
+      Description: "Versión 1.0.0 de la documentación de la API de Tasks"
+
+# ============================================================================
+# OUTPUTS
+# ============================================================================
+Outputs:
+  ECSAPIEndpoint:
+    Description: API Gateway público (arquitectura acoplada ECS)
+    Value: !Sub "https://${RestAPI}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  ECSAPIKeyId:
+    Description: API Key ID (arquitectura acoplada ECS)
+    Value: !Ref APIKey

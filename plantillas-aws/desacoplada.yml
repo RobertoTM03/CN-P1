@@ -1,0 +1,702 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "API Gateway + múltiples Lambdas desde imagen ECR (Arquitectura desacoplada)"
+
+Parameters:
+  ImageName:
+    Type: String
+    Default: tasks-desacoplada:latest
+    Description: Imagen ECR con arquitectura desacoplada para Lambdas
+
+  DBDynamoName:
+    Type: String
+    Default: "tasks"
+    Description: Nombre de la tabla DynamoDB para api de tasks
+
+Resources:
+  # -----------------------------------------------------------
+  # LAMBDAS
+  # -----------------------------------------------------------
+  CreateTaskLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: CreateTaskLambdaLogGroup 
+    Properties:
+      FunctionName: tasks-lambda-create
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DBDynamoName
+      ImageConfig:
+        Command: ["src/interfaces/aws-lambda/handlers/createTask.handler"]
+
+  GetAllTasksLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: GetAllTasksLambdaLogGroup
+    Properties:
+      FunctionName: tasks-lambda-get-all
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DBDynamoName
+      ImageConfig:
+        Command: ["src/interfaces/aws-lambda/handlers/getAllTasks.handler"]
+
+  GetTaskByIdLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: GetTaskByIdLambdaLogGroup
+    Properties:
+      FunctionName: tasks-lambda-get-by-id
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DBDynamoName
+      ImageConfig:
+        Command: ["src/interfaces/aws-lambda/handlers/getTaskById.handler"]
+
+  UpdateTaskLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: UpdateTaskLambdaLogGroup
+    Properties:
+      FunctionName: tasks-lambda-update
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DBDynamoName
+      ImageConfig:
+        Command: ["src/interfaces/aws-lambda/handlers/updateTask.handler"]
+
+  DeleteTaskLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: DeleteTaskLambdaLogGroup
+    Properties:
+      FunctionName: tasks-lambda-delete
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DBDynamoName
+      ImageConfig:
+        Command: ["src/interfaces/aws-lambda/handlers/deleteTask.handler"]
+  
+  # -----------------------------------------------------------
+  # GRUPOS DE LOGS DE CLOUDWATCH PARA CADA LAMBDA
+  # -----------------------------------------------------------
+  CreateTaskLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/tasks-lambda-create
+      RetentionInDays: 7
+
+  GetAllTasksLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/tasks-lambda-get-all
+      RetentionInDays: 7
+
+  GetTaskByIdLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/tasks-lambda-get-by-id
+      RetentionInDays: 7
+
+  UpdateTaskLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/tasks-lambda-update
+      RetentionInDays: 7
+
+  DeleteTaskLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/tasks-lambda-delete
+      RetentionInDays: 7
+
+  # -----------------------------------------------------------
+  # API GATEWAY
+  # -----------------------------------------------------------
+  RestAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: tasks-lambda-api
+      Description: API pública desacoplada (arquitectura Lambda serverless)
+  
+  # Recursos de API Gateway
+  TasksResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: tasks
+
+  TaskResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: task
+
+  TaskIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !Ref TaskResource
+      PathPart: "{id}"
+
+  # Métodos CRUD
+  # GET /tasks (obtener todas las tareas)
+  GetTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TasksResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetAllTasksLambda.Arn}/invocations"
+
+  # POST /task (crear una tarea)
+  PostTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateTaskLambda.Arn}/invocations"
+
+  # GET /task/{id} (obtener una tarea por ID)
+  GetTaskByIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetTaskByIdLambda.Arn}/invocations"
+
+  # PUT /task/{id} (actualizar una tarea)
+  PutTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateTaskLambda.Arn}/invocations"
+
+  # DELETE /task/{id} (eliminar una tarea)
+  DeleteTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteTaskLambda.Arn}/invocations"
+
+  # OPTIONS para CORS
+  OptionsTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TasksResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  OptionsTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  OptionsTaskIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestAPI
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  # Permisos de Lambda para API Gateway
+  CreateTaskLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CreateTaskLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/*"
+
+  GetAllTasksLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GetAllTasksLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/*"
+
+  GetTaskByIdLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GetTaskByIdLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/*"
+
+  UpdateTaskLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref UpdateTaskLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/*"
+
+  DeletetaskLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DeleteTaskLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/*"
+
+  # Despliegue de la API
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetTasksMethod
+      - GetTaskByIdMethod
+      - PostTaskMethod
+      - PutTaskMethod
+      - DeleteTaskMethod
+      - OptionsTasksMethod
+      - OptionsTaskMethod
+      - OptionsTaskIdMethod
+    Properties:
+      RestApiId: !Ref RestAPI
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: prod
+
+  # -----------------------------------------------------------
+  # API KEY Y USAGE PLAN
+  # -----------------------------------------------------------
+  APIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: tasks-lambda-api-key
+      Enabled: true
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: APIStage
+    Properties:
+      UsagePlanName: tasks-lambda-usage-plan
+      ApiStages:
+        - ApiId: !Ref RestAPI
+          Stage: !Ref APIStage
+
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref APIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # -----------------------------------------------------------
+  # DOCUMENTACIÓN DE API GATEWAY
+  # -----------------------------------------------------------
+
+  # Documentación general de la API
+  APIDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: API
+      Properties: !Sub |
+        {
+          "info": {
+            "description": "API REST para la gestión de tareas (Tasks CRUD). Arquitectura desacoplada usando AWS Lambda con DynamoDB.",
+            "version": "1.0.0"
+          }
+        }
+
+  # Documentación del recurso /tasks
+  TasksResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /tasks
+      Properties: !Sub |
+        {
+          "description": "Recurso para gestionar la colección de tareas"
+        }
+
+  # Documentación del método GET /tasks
+  GetTasksMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /tasks
+        Method: GET
+      Properties: !Sub |
+        {
+          "summary": "Obtener todas las tareas",
+          "description": "Devuelve un listado completo de todas las tareas almacenadas en DynamoDB mediante Lambda",
+          "tags": ["Tasks"],
+          "responses": {
+            "200": {
+              "description": "Lista de tareas obtenida exitosamente"
+            },
+            "500": {
+              "description": "Error interno del servidor"
+            }
+          }
+        }
+
+  # Documentación del recurso /task
+  TaskResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /task
+      Properties: !Sub |
+        {
+          "description": "Recurso para operaciones sobre tareas individuales"
+        }
+
+  # Documentación del método POST /task
+  PostTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task
+        Method: POST
+      Properties: !Sub |
+        {
+          "summary": "Crear una nueva tarea",
+          "description": "Crea una nueva tarea en DynamoDB con título y descripción mediante Lambda",
+          "tags": ["Tasks"],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["title", "description"],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Título de la tarea"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Descripción de la tarea"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Tarea creada exitosamente"
+            },
+            "400": {
+              "description": "Datos de entrada inválidos"
+            }
+          }
+        }
+
+  # Documentación del recurso /task/{id}
+  TaskIdResourceDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: RESOURCE
+        Path: /task/{id}
+      Properties: !Sub |
+        {
+          "description": "Recurso para operaciones sobre una tarea específica identificada por su ID"
+        }
+
+  # Documentación del método GET /task/{id}
+  GetTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: GET
+      Properties: !Sub |
+        {
+          "summary": "Obtener una tarea por ID",
+          "description": "Recupera los detalles de una tarea específica usando su identificador único mediante Lambda",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Tarea encontrada"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Documentación del método PUT /task/{id}
+  PutTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: PUT
+      Properties: !Sub |
+        {
+          "summary": "Actualizar una tarea",
+          "description": "Actualiza el título y/o descripción de una tarea existente mediante Lambda",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea a actualizar"
+            }
+          ],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["title", "description"],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Nuevo título de la tarea"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Nueva descripción de la tarea"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Tarea actualizada exitosamente"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Documentación del método DELETE /task/{id}
+  DeleteTaskMethodDocumentation:
+    Type: AWS::ApiGateway::DocumentationPart
+    Properties:
+      RestApiId: !Ref RestAPI
+      Location:
+        Type: METHOD
+        Path: /task/{id}
+        Method: DELETE
+      Properties: !Sub |
+        {
+          "summary": "Eliminar una tarea",
+          "description": "Elimina permanentemente una tarea de la base de datos mediante Lambda",
+          "tags": ["Tasks"],
+          "parameters": [
+            {
+              "name": "id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "description": "ID único de la tarea a eliminar"
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "Tarea eliminada exitosamente (sin contenido)"
+            },
+            "404": {
+              "description": "Tarea no encontrada"
+            }
+          }
+        }
+
+  # Versión de la documentación
+  APIDocumentationVersion:
+    Type: AWS::ApiGateway::DocumentationVersion
+    DependsOn:
+      - APIDocumentation
+      - TasksResourceDocumentation
+      - GetTasksMethodDocumentation
+      - TaskResourceDocumentation
+      - PostTaskMethodDocumentation
+      - TaskIdResourceDocumentation
+      - GetTaskMethodDocumentation
+      - PutTaskMethodDocumentation
+      - DeleteTaskMethodDocumentation
+    Properties:
+      RestApiId: !Ref RestAPI
+      DocumentationVersion: "1.0.0"
+      Description: "Versión 1.0.0 de la documentación de la API de Tasks (Lambda)"
+
+Outputs:
+  LambdaAPIEndpoint:
+    Description: Endpoint público de la API Lambda (arquitectura desacoplada)
+    Value: !Sub "https://${RestAPI}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  LambdaAPIKeyId:
+    Description: API Key ID (arquitectura desacoplada Lambda)
+    Value: !Ref APIKey

@@ -18,7 +18,7 @@ exports.handler = async (event) => {
             headers: {
                 "Content-Type": "application/json",
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type,x-api-key",
+                "Access-Control-Allow-Headers": "Content-Type,x-api-key,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
                 "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS"
             },
             body: JSON.stringify(updatedTask),
@@ -33,7 +33,7 @@ exports.handler = async (event) => {
                 headers: {
                     "Content-Type": "application/json",
                     "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Content-Type,x-api-key",
+                    "Access-Control-Allow-Headers": "Content-Type,x-api-key,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
                     "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS"
                 },
                 body: JSON.stringify({ error: error.message }),
@@ -45,7 +45,7 @@ exports.handler = async (event) => {
             headers: {
                 "Content-Type": "application/json",
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type,x-api-key",
+                "Access-Control-Allow-Headers": "Content-Type,x-api-key,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
                 "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS"
             },
             body: JSON.stringify({ error: error.message || 'Internal Server Error' }),
