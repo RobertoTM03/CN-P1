@@ -477,11 +477,12 @@ Resources:
                   "properties": {
                     "title": {
                       "type": "string",
-                      "description": "Título de la tarea"
+                      "description": "Título de la tarea (requerido, no vacío)"
                     },
                     "description": {
                       "type": "string",
-                      "description": "Descripción de la tarea"
+                      "description": "Descripción de la tarea (requerido, no vacío, máximo 256 caracteres)",
+                      "maxLength": 256
                     }
                   }
                 }
@@ -493,7 +494,10 @@ Resources:
               "description": "Tarea creada exitosamente"
             },
             "400": {
-              "description": "Datos de entrada inválidos"
+              "description": "Datos de entrada inválidos: Title is required / Description is required / Description must not exceed 256 characters"
+            },
+            "500": {
+              "description": "Error interno del servidor"
             }
           }
         }
@@ -533,15 +537,21 @@ Resources:
               "schema": {
                 "type": "string"
               },
-              "description": "ID único de la tarea"
+              "description": "ID único de la tarea (requerido, no vacío)"
             }
           ],
           "responses": {
             "200": {
               "description": "Tarea encontrada"
             },
+            "400": {
+              "description": "ID de tarea inválido: Task ID is required in the path"
+            },
             "404": {
               "description": "Tarea no encontrada"
+            },
+            "500": {
+              "description": "Error interno del servidor"
             }
           }
         }
@@ -568,7 +578,7 @@ Resources:
               "schema": {
                 "type": "string"
               },
-              "description": "ID único de la tarea a actualizar"
+              "description": "ID único de la tarea a actualizar (requerido, no vacío)"
             }
           ],
           "requestBody": {
@@ -581,11 +591,12 @@ Resources:
                   "properties": {
                     "title": {
                       "type": "string",
-                      "description": "Nuevo título de la tarea"
+                      "description": "Nuevo título de la tarea (requerido, no vacío)"
                     },
                     "description": {
                       "type": "string",
-                      "description": "Nueva descripción de la tarea"
+                      "description": "Nueva descripción de la tarea (requerido, no vacío, máximo 256 caracteres)",
+                      "maxLength": 256
                     }
                   }
                 }
@@ -596,8 +607,14 @@ Resources:
             "200": {
               "description": "Tarea actualizada exitosamente"
             },
+            "400": {
+              "description": "Datos de entrada inválidos: Task ID is required / Title is required / Description is required / Description must not exceed 256 characters"
+            },
             "404": {
               "description": "Tarea no encontrada"
+            },
+            "500": {
+              "description": "Error interno del servidor"
             }
           }
         }
@@ -624,15 +641,21 @@ Resources:
               "schema": {
                 "type": "string"
               },
-              "description": "ID único de la tarea a eliminar"
+              "description": "ID único de la tarea a eliminar (requerido, no vacío)"
             }
           ],
           "responses": {
             "204": {
               "description": "Tarea eliminada exitosamente (sin contenido)"
             },
+            "400": {
+              "description": "ID de tarea inválido: Task ID is required in the path"
+            },
             "404": {
               "description": "Tarea no encontrada"
+            },
+            "500": {
+              "description": "Error interno del servidor"
             }
           }
         }

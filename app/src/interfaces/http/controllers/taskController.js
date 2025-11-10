@@ -60,6 +60,10 @@ exports.createTask = async (req, res) => {
             return res.status(400).json({ error: 'Description is required in the request body' });
         }
 
+        if (description.trim().length > 256) {
+            return res.status(400).json({ error: 'Description must not exceed 256 characters' });
+        }
+
         const task = await createTaskUseCase.execute({ 
             title: title.trim(), 
             description: description.trim() 
@@ -108,6 +112,10 @@ exports.updateTask = async (req, res) => {
 
         if (!description || typeof description !== 'string' || !description.trim()) {
             return res.status(400).json({ error: 'Description is required in the request body' });
+        }
+
+        if (description.trim().length > 256) {
+            return res.status(400).json({ error: 'Description must not exceed 256 characters' });
         }
 
         const updatedTask = await updateTaskUseCase.execute({
