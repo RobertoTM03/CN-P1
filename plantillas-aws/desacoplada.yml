@@ -413,6 +413,9 @@ Resources:
       ApiStages:
         - ApiId: !Ref RestAPI
           Stage: !Ref APIStage
+      Throttle:
+        RateLimit: 5
+        BurstLimit: 10
 
   UsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
