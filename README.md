@@ -75,3 +75,98 @@ Scripts auxiliares:
 Recursos para pruebas:
 - **`coleccion_pruebas_postman.json`** - Colección de Postman con pruebas de la API
 - **`index.html`** - Interfaz web para probar la API
+
+## Despliegue y Pruebas
+
+### Requisitos Previos
+- AWS CLI configurado con credenciales válidas
+- Docker instalado
+- Cuenta de AWS con permisos necesarios
+
+### Arquitectura Acoplada (ECS/Fargate)
+
+#### 1. Crear el repositorio ECR
+Desplegar la plantilla `plantillas-aws/ecr.yml` con el siguiente parámetro:
+- **RepositoryName**: `tasks-acoplada`
+
+#### 2. Construir y subir la imagen Docker
+Desde la carpeta `app/`:
+```bash
+# Login en ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+
+# Construir la imagen
+docker build --platform linux/amd64 -t tasks-acoplada -f ./Dockerfile.acoplada . --provenance=false
+
+# Etiquetar la imagen
+docker tag tasks-acoplada:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/tasks-acoplada:latest
+
+# Subir la imagen
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/tasks-acoplada:latest
+```
+
+#### 3. Crear la base de datos DynamoDB
+Desplegar la plantilla `plantillas-aws/db_dynamodb.yml` con el siguiente parámetro:
+- **TableName**: `tasks`
+
+#### 4. Desplegar la arquitectura acoplada
+Desplegar la plantilla `plantillas-aws/acoplada.yml` con las capacidades de IAM necesarias y los siguientes parámetros:
+- **ImageName**: `tasks-acoplada:latest`
+- **SubnetIds**: Al menos 2 subnets de la VPC
+- **VpcId**: ID de la VPC donde se desplegará ECS
+- **VpcCidr**: Bloque CIDR de la VPC (ej. `10.0.0.0/16`)
+- **DBDynamoName**: `tasks` (nombre de la tabla DynamoDB creada)
+
+#### 5. Obtener la URL del servicio y la API Key
+Una vez desplegado el stack, obtener la URL del servicio y la API Key desde los outputs del stack. El script `scripts/get-api-key.sh` puede ayudar a obtener la API Key.
+
+### Arquitectura Desacoplada (Lambda + API Gateway)
+
+#### 1. Crear el repositorio ECR (si no se ha hecho antes)
+Desplegar la plantilla `plantillas-aws/ecr.yml` con el siguiente parámetro:
+- **RepositoryName**: `tasks-desacoplada`
+
+#### 2. Construir y subir la imagen Docker
+Desde la carpeta `app/`:
+```bash
+# Login en ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+
+# Construir la imagen
+docker build --platform linux/amd64 -t tasks-desacoplada -f ./Dockerfile.desacoplada . --provenance=false
+
+# Etiquetar la imagen
+docker tag tasks-desacoplada:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/tasks-desacoplada:latest
+
+# Subir la imagen
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/tasks-desacoplada:latest
+```
+
+#### 3. Crear la base de datos DynamoDB (si no se ha hecho antes)
+Desplegar la plantilla `plantillas-aws/db_dynamodb.yml` con el siguiente parámetro:
+- **TableName**: `tasks`
+
+#### 4. Desplegar la arquitectura desacoplada
+Desplegar la plantilla `plantillas-aws/desacoplada.yml` con las capacidades de IAM necesarias y los siguientes parámetros:
+- **ImageName**: `tasks-desacoplada:latest`
+- **DBDynamoName**: `tasks` (nombre de la tabla DynamoDB creada)
+
+#### 5. Obtener la URL de la API y la API Key
+Una vez desplegado el stack, obtener la URL de la API y la API Key desde los outputs del stack. El script `scripts/get-api-key.sh` puede ayudar a obtener la API Key.
+
+### Probar la API
+
+#### Opción 1: Postman
+1. Importar la colección `testeo/coleccion_pruebas_postman.json`
+2. Configurar las variables de entorno:
+   - `base_url`: URL obtenida del despliegue
+   - `api_key`: API Key obtenida del stack
+3. Ejecutar las pruebas
+
+#### Opción 2: Interfaz Web
+1. Abrir `testeo/index.html` en un navegador
+2. Configurar la URL base de la API
+3. Configurar la API Key
+4. Probar los diferentes endpoints (GET, POST, PUT, DELETE)
+
+**Nota:** Ambas arquitecturas requieren API Key para acceder a los endpoints.
