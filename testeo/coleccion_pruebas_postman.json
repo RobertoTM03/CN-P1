@@ -1,0 +1,177 @@
+{
+	"info": {
+		"_postman_id": "a8f3d1b6-a0b5-41a4-9c01-70e6a8c3d1b0",
+		"name": "API de Tareas (AWS)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Create Task",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// Asume que la respuesta devuelve el item creado con un 'task_id'",
+							"try {",
+							"    var jsonData = pm.response.json();",
+							"    if (jsonData && jsonData.task_id) {",
+							"        pm.collectionVariables.set(\"taskId\", jsonData.task_id);",
+							"        console.log(\"ID de tarea guardado: \" + jsonData.task_id);",
+							"    }",
+							"} catch (e) {",
+							"    console.log(\"No se pudo guardar el task_id de la respuesta.\");",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"title\": \"Mi primera tarea\",\n    \"description\": \"Hacer la compra\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/task",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"task"
+					]
+				},
+				"description": "Crea un nuevo elemento"
+			},
+			"response": []
+		},
+		{
+			"name": "2. Get All Tasks",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/tasks",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"tasks"
+					]
+				},
+				"description": "Obtiene todos los elementos"
+			},
+			"response": []
+		},
+		{
+			"name": "3. Get Task by ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/task/{{taskId}}",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"task",
+						"{{taskId}}"
+					]
+				},
+				"description": "Obtiene un elemento por su ID"
+			},
+			"response": []
+		},
+		{
+			"name": "4. Update Task",
+			"request": {
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"title\": \"Tarea actualizada\",\n    \"description\": \"Ya he hecho la compra, ahora a descansar\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/task/{{taskId}}",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"task",
+						"{{taskId}}"
+					]
+				},
+				"description": "Actualiza un elemento existente"
+			},
+			"response": []
+		},
+		{
+			"name": "5. Delete Task",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/task/{{taskId}}",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"task",
+						"{{taskId}}"
+					]
+				},
+				"description": "Elimina un elemento"
+			},
+			"response": []
+		}
+	],
+	"auth": {
+		"type": "apikey",
+		"apikey": [
+			{
+				"key": "value",
+				"value": "{{apiKey}}",
+				"type": "string"
+			},
+			{
+				"key": "key",
+				"value": "x-api-key",
+				"type": "string"
+			},
+			{
+				"key": "in",
+				"value": "header",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://tu-api.execute-api.us-east-1.amazonaws.com/prod",
+			"type": "string"
+		},
+		{
+			"key": "apiKey",
+			"value": "PEGA_AQUI_TU_API_KEY",
+			"type": "string"
+		},
+		{
+			"key": "taskId",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
